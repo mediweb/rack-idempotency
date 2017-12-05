@@ -57,4 +57,48 @@ RSpec.describe Rack::Idempotency do
       end
     end
   end
+
+  context "with redis store" do
+    let(:middleware) { Rack::Idempotency.new(app, store: Rack::Idempotency::RedisStore.new) }
+    let(:storage_key) { "rack:idempotency:" + key }
+
+    context "without an idempotency key" do
+      subject { request.get("/").body }
+
+      it { is_expected.to_not be_empty }
+    end
+
+    context "with an idempotency key" do
+      let(:get_request) { request.get("/", "HTTP_IDEMPOTENCY_KEY" => key) }
+
+      context "with a successful request" do
+        subject { get_request.body }
+        it { is_expected.to_not be_empty }
+      end
+
+      context "with concurrent request with same key" do
+        subject { get_request }
+        it do
+          store = Rack::Idempotency::RedisStore.new
+          store.lock(storage_key) do
+            expect(subject.body).to be_empty
+            expect(subject.headers).to eq({"X-Accel-Redirect" => "/drop", "Content-Length" => "0"})
+          end
+        end
+      end
+
+      context "with concurrent request with different key" do
+        subject { get_request }
+        let(:different_key) { SecureRandom.uuid }
+
+        it do
+          store = Rack::Idempotency::RedisStore.new
+          store.lock(different_key) do
+            expect(subject.body).to_not be_empty
+            expect(subject.headers).to eq("Content-Type"=>"text/plain", "Content-Length"=>"36")
+          end
+        end
+      end
+    end
+  end
 end

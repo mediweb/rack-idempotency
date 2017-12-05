@@ -20,23 +20,47 @@ module Rack
     def initialize(app, store: NullStore.new)
       @app     = app
       @store   = store
+      if @store.class.to_s == "Rack::Idempotency::RedisStore"
+        @mutex_mode = true
+        @cache_errors = true
+      end
     end
 
     def call(env)
       request = Request.new(env.dup.freeze)
-      storage = RequestStorage.new(@store, request)
+      read_response(request, env).to_a
+    end
 
-      storage.read || store_response(storage, env)
+    def read_response(request, env)
+      if request.idempotency_key
+        @storage = RequestStorage.new(@store, request)
+        @storage.read || store_response(env)
+      else
+        Response.new(*@app.call(env))
+      end
     end
 
     private
 
-    def store_response(storage, env)
+    def fetch_and_cache(env)
       response = Response.new(*@app.call(env))
+      @storage.write(response) if @cache_errors || response.success?
+      response
+    end
 
-      storage.write(response) if response.success?
-
-      response.to_a
+    def store_response(env)
+      if @mutex_mode
+        resp = nil
+        @store.lock(@storage.key) do
+          resp = fetch_and_cache(env)
+        end
+        unless resp
+          resp = Response.new(444, {"X-Accel-Redirect" => "/drop"}, [""])
+        end
+        resp
+      else
+        fetch_and_cache(env)
+      end
     end
   end
 end

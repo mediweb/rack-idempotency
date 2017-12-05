@@ -14,6 +14,13 @@ module Rack
         @store.set(id, value)
       end
 
+      def lock(id, &block)
+        s = Redis::Semaphore.new(id, :redis => @store)
+        s.lock(0) do
+          block.call
+        end
+      end
+
       private
 
       attr_reader :store
