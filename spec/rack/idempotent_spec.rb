@@ -53,7 +53,9 @@ RSpec.describe Rack::Idempotency do
       context "on second request" do
         let(:original) { request.get("/", "HTTP_IDEMPOTENCY_KEY" => key).body }
 
-        it { is_expected.to_not eq(original) }
+        # This is different from the original
+        # we want to cache error responses as well
+        it { is_expected.to eq(original) }
       end
     end
   end
@@ -81,8 +83,20 @@ RSpec.describe Rack::Idempotency do
         it do
           store = Rack::Idempotency::RedisStore.new
           store.lock(storage_key) do
-            expect(subject.body).to be_empty
-            expect(subject.headers).to eq({"X-Accel-Redirect" => "/drop", "Content-Length" => "0"})
+            expect { subject.body }.to raise_error("EmptyResponse")
+          end
+        end
+        context "with custom empty response handler" do
+          let(:middleware) do
+            Rack::Idempotency.new(app,
+              store: Rack::Idempotency::RedisStore.new,
+              on_mutex_error: Rack::Idempotency::Response.new(444, {"X-Accel-Redirect" => "/drop"}, [""]) )
+          end
+          it do
+            store = Rack::Idempotency::RedisStore.new
+            store.lock(storage_key) do
+              expect(subject.headers).to eq({"X-Accel-Redirect" => "/drop", "Content-Length" => "0"})
+            end
           end
         end
       end

@@ -17,12 +17,13 @@ module Rack
   # the given cache.  When the client retries, it will get the previously
   # cached response.
   class Idempotency
-    def initialize(app, store: NullStore.new)
+    def initialize(app, store: NullStore.new, on_mutex_error: nil)
       @app     = app
       @store   = store
-      if @store.class.to_s == "Rack::Idempotency::RedisStore"
+      @on_mutex_error = on_mutex_error
+      @cache_errors = true
+      if @store.respond_to?(:lock)
         @mutex_mode = true
-        @cache_errors = true
       end
     end
 
@@ -55,7 +56,7 @@ module Rack
           resp = fetch_and_cache(env)
         end
         unless resp
-          resp = Response.new(444, {"X-Accel-Redirect" => "/drop"}, [""])
+          resp = @on_mutex_error || raise("EmptyResponse")
         end
         resp
       else
