@@ -4,6 +4,7 @@ require "rack/idempotency/version"
 
 require "rack/idempotency/errors"
 require "rack/idempotency/memory_store"
+require "rack/idempotency/redis_store"
 require "rack/idempotency/null_store"
 require "rack/idempotency/request"
 require "rack/idempotency/request_storage"
@@ -16,26 +17,51 @@ module Rack
   # the given cache.  When the client retries, it will get the previously
   # cached response.
   class Idempotency
-    def initialize(app, store: NullStore.new)
+    def initialize(app, store: NullStore.new, on_mutex_error: nil)
       @app     = app
       @store   = store
+      @on_mutex_error = on_mutex_error
+      @cache_errors = true
+      if @store.respond_to?(:lock)
+        @mutex_mode = true
+      end
     end
 
     def call(env)
       request = Request.new(env.dup.freeze)
-      storage = RequestStorage.new(@store, request)
+      read_response(request, env).to_a
+    end
 
-      storage.read || store_response(storage, env)
+    def read_response(request, env)
+      if request.idempotency_key
+        @storage = RequestStorage.new(@store, request)
+        @storage.read || store_response(env)
+      else
+        Response.new(*@app.call(env))
+      end
     end
 
     private
 
-    def store_response(storage, env)
+    def fetch_and_cache(env)
       response = Response.new(*@app.call(env))
+      @storage.write(response) if @cache_errors || response.success?
+      response
+    end
 
-      storage.write(response) if response.success?
-
-      response.to_a
+    def store_response(env)
+      if @mutex_mode
+        resp = nil
+        @store.lock(@storage.key) do
+          resp = fetch_and_cache(env)
+        end
+        unless resp
+          resp = @on_mutex_error || raise("EmptyResponse")
+        end
+        resp
+      else
+        fetch_and_cache(env)
+      end
     end
   end
 end

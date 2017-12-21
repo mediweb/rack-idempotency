@@ -6,6 +6,7 @@ SimpleCov.start
 require "rack/idempotency"
 require "rack/mock"
 require "securerandom"
+require "redis-semaphore"
 
 RSpec.configure do |config|
   # Enable flags like --only-failures and --next-failure
